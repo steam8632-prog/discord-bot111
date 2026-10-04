@@ -6,7 +6,7 @@ import {
   GatewayIntentBits,
   type Message,
 } from "discord.js";
-import { findFirstVideo, IwaraLookupError } from "./iwara.js";
+import { findVideoOnSearchPage, IwaraLookupError } from "./iwara.js";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
 if (!token) {
@@ -20,6 +20,17 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
   ],
 });
+
+interface SearchProgress {
+  query: string;
+  nextPage: number;
+  hasNextPage: boolean;
+  updatedAt: number;
+}
+
+const searchProgress = new Map<string, SearchProgress>();
+const searchQueues = new Map<string, Promise<void>>();
+const SEARCH_PROGRESS_TTL_MS = 60 * 60 * 1000;
 
 function hasExpectedCommandShape(
   options: readonly {
@@ -95,6 +106,40 @@ function getEmbedVideoQuery(content: string): string | null {
   return query;
 }
 
+function normalizeSearchQuery(query: string): string {
+  return query.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getSearchProgressKey(message: Message): string {
+  return `${message.channelId}:${message.author.id}`;
+}
+
+function pruneExpiredSearchProgress(): void {
+  const expiry = Date.now() - SEARCH_PROGRESS_TTL_MS;
+  for (const [key, progress] of searchProgress) {
+    if (progress.updatedAt < expiry) {
+      searchProgress.delete(key);
+    }
+  }
+}
+
+async function runInSearchOrder(
+  key: string,
+  action: () => Promise<void>,
+): Promise<void> {
+  const previous = searchQueues.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(action);
+  searchQueues.set(key, current);
+
+  try {
+    await current;
+  } finally {
+    if (searchQueues.get(key) === current) {
+      searchQueues.delete(key);
+    }
+  }
+}
+
 async function handleMessage(message: Message): Promise<void> {
   if (message.author.bot || message.webhookId || !message.inGuild()) {
     return;
@@ -122,30 +167,77 @@ async function handleMessage(message: Message): Promise<void> {
   }
 
   const reply = await message.reply({
-    content: "Hľadám prvý výsledok na IWARA…",
+    content: "Hľadám na IWARA…",
     allowedMentions: { parse: [], repliedUser: false },
   });
 
-  try {
-    const video = await findFirstVideo(query);
-    if (!video) {
-      await reply.edit("Nenašiel som video zodpovedajúce vyhľadávaniu.");
+  const progressKey = getSearchProgressKey(message);
+  const normalizedQuery = normalizeSearchQuery(query);
+
+  await runInSearchOrder(progressKey, async () => {
+    pruneExpiredSearchProgress();
+    const previousProgress = searchProgress.get(progressKey);
+    const sameQuery = previousProgress?.query === normalizedQuery;
+
+    if (sameQuery && previousProgress && !previousProgress.hasNextPage) {
+      searchProgress.delete(progressKey);
+      await reply.edit(
+        "Prešiel som všetky podstránky tohto vyhľadávania. Ďalší príkaz začne znova od prvej.",
+      );
       return;
     }
 
-    await reply.edit({
-      content: video.proxyUrl,
-      allowedMentions: { parse: [] },
-    });
-  } catch (error) {
-    if (error instanceof IwaraLookupError) {
-      await reply.edit(error.message);
-      return;
+    if (!sameQuery) {
+      searchProgress.delete(progressKey);
     }
 
-    console.error("The IWARA video lookup failed.");
-    await reply.edit("IWARA sa teraz nepodarilo načítať. Skús to o chvíľu.");
-  }
+    const page = sameQuery ? previousProgress.nextPage : 0;
+
+    try {
+      const { video, hasNextPage } = await findVideoOnSearchPage(query, page);
+      const nextProgress: SearchProgress = {
+        query: normalizedQuery,
+        nextPage: page + 1,
+        hasNextPage,
+        updatedAt: Date.now(),
+      };
+
+      if (video || hasNextPage || page > 0) {
+        searchProgress.set(progressKey, nextProgress);
+      } else {
+        searchProgress.delete(progressKey);
+      }
+
+      if (video) {
+        await reply.edit({
+          content: video.proxyUrl,
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+
+      if (hasNextPage) {
+        await reply.edit(
+          `Na ${page + 1}. podstránke som nenašiel prehrateľné video. Ďalší príkaz pokračuje na ${page + 2}. podstránke.`,
+        );
+        return;
+      }
+
+      await reply.edit(
+        page === 0
+          ? "Nenašiel som verejne prehrateľné video v tomto vyhľadávaní."
+          : `Na ${page + 1}. podstránke som nenašiel prehrateľné video a ďalšie výsledky už nie sú.`,
+      );
+    } catch (error) {
+      if (error instanceof IwaraLookupError) {
+        await reply.edit(error.message);
+        return;
+      }
+
+      console.error("The IWARA video lookup failed.");
+      await reply.edit("IWARA sa teraz nepodarilo načítať. Skús to o chvíľu.");
+    }
+  });
 }
 
 client.on(Events.MessageCreate, (message) => {

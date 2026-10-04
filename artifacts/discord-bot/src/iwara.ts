@@ -24,6 +24,9 @@ interface IwaraSearchItem {
 
 interface IwaraSearchResponse {
   results: IwaraSearchItem[];
+  page: number;
+  limit: number;
+  count: number;
 }
 
 interface IwaraVideoDetails {
@@ -42,6 +45,11 @@ export interface IwaraVideoLink {
   title: string;
   sourceUrl: string;
   proxyUrl: string;
+}
+
+export interface IwaraVideoPageResult {
+  video: IwaraVideoLink | null;
+  hasNextPage: boolean;
 }
 
 export class IwaraLookupError extends Error {
@@ -136,7 +144,16 @@ async function fetchJson(url: URL): Promise<unknown> {
 }
 
 function parseSearchResponse(payload: unknown): IwaraSearchResponse {
-  if (!isRecord(payload) || !Array.isArray(payload["results"])) {
+  if (
+    !isRecord(payload) ||
+    !Array.isArray(payload["results"]) ||
+    !Number.isInteger(payload["page"]) ||
+    !Number.isInteger(payload["limit"]) ||
+    !Number.isInteger(payload["count"]) ||
+    (payload["page"] as number) < 0 ||
+    (payload["limit"] as number) <= 0 ||
+    (payload["count"] as number) < 0
+  ) {
     throw new IwaraLookupError("IWARA returned an unexpected search response.");
   }
 
@@ -158,7 +175,12 @@ function parseSearchResponse(payload: unknown): IwaraSearchResponse {
     });
   }
 
-  return { results };
+  return {
+    results,
+    page: payload["page"] as number,
+    limit: payload["limit"] as number,
+    count: payload["count"] as number,
+  };
 }
 
 function parseVideoDetails(payload: unknown): IwaraVideoDetails {
@@ -295,15 +317,25 @@ function buildSourceUrl(id: string, slug?: string | null): string {
   return `${IWARA_SITE_BASE}/video/${encodeURIComponent(id)}${suffix}`;
 }
 
-export async function findFirstVideo(query: string): Promise<IwaraVideoLink | null> {
+export async function findVideoOnSearchPage(
+  query: string,
+  page: number,
+): Promise<IwaraVideoPageResult> {
+  if (!Number.isInteger(page) || page < 0) {
+    throw new IwaraLookupError("Invalid IWARA search page.");
+  }
+
   const searchUrl = new URL("/search", IWARA_API_BASE);
   searchUrl.searchParams.set("query", query);
   searchUrl.searchParams.set("type", "videos");
   searchUrl.searchParams.set("sort", "relevance");
-  searchUrl.searchParams.set("page", "0");
+  searchUrl.searchParams.set("page", String(page));
   searchUrl.searchParams.set("limit", "32");
 
   const search = parseSearchResponse(await fetchJson(searchUrl));
+  const hasNextPage =
+    (search.page + 1) * search.limit < search.count;
+
   for (const result of search.results) {
     if (result.private) {
       continue;
@@ -322,9 +354,12 @@ export async function findFirstVideo(query: string): Promise<IwaraVideoLink | nu
       const slug = details.slug || result.slug;
 
       return {
-        title,
-        sourceUrl: buildSourceUrl(id, slug),
-        proxyUrl: buildProxyUrl(signedUrl),
+        video: {
+          title,
+          sourceUrl: buildSourceUrl(id, slug),
+          proxyUrl: buildProxyUrl(signedUrl),
+        },
+        hasNextPage,
       };
     } catch (error) {
       if (
@@ -337,5 +372,5 @@ export async function findFirstVideo(query: string): Promise<IwaraVideoLink | nu
     }
   }
 
-  return null;
+  return { video: null, hasNextPage };
 }

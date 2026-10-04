@@ -3,7 +3,9 @@
 The bot watches ordinary Discord messages for `/embed video [search words]`.
 It searches IWARA with the site's video-search endpoint, skips private results,
 resolves the first playable source URL, and posts only the Cloudflare Worker
-link. The bot does not download or store video files.
+link. Repeating the same search advances to the next results page for that
+person in that channel; a different search starts at page one. The bot does not
+download or store video files.
 
 ## Setup
 

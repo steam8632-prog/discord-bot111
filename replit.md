@@ -37,7 +37,7 @@ Discord bot that recognizes the plain-text message `/embed video [words]`, searc
 
 ## Product
 
-- Search IWARA with the site's video-search endpoint and post the first playable result as a Discord preview through the existing Worker.
+- Repeated identical searches by the same person in the same channel advance one IWARA results page at a time; a new query starts at page one. Skip private videos and post only the first playable result's Worker link.
 
 ## User preferences
 
