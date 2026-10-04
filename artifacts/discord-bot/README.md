@@ -1,9 +1,9 @@
 # Discord IWARA video bot
 
-The bot adds the global `/embed video query:<search words>` slash command. It
-searches IWARA, loads the first video's details, and posts the signed file URL
-through the existing Cloudflare Worker. The bot does not download or store video
-files.
+The bot watches ordinary Discord messages for `/embed video [search words]`.
+It searches IWARA, loads the first video's details, and posts the signed file
+URL through the existing Cloudflare Worker. The bot does not download or store
+video files.
 
 ## Setup
 
@@ -11,16 +11,16 @@ files.
    bot user.
 2. Add its bot token to this Replit project's Secrets as `DISCORD_BOT_TOKEN`.
    Never put the token in chat or source files.
-3. In the Developer Portal's Installation settings, enable the `bot` and
-   `applications.commands` scopes. Grant the bot permission to send messages,
-   then install it in the target server.
-4. Start the `Discord IWARA Bot` workflow in Replit.
-5. Use `/embed video` and enter a search phrase in `query`.
+3. In **Bot → Privileged Gateway Intents**, enable **Message Content Intent**.
+   The bot needs this to read ordinary messages. Save the setting.
+4. Install the bot in the target server with the `bot` scope. Give it permission
+   to view the channel and send messages.
+5. Start the `Discord IWARA Bot` workflow in Replit.
+6. Send a message such as `/embed video mmd` or `/embed video [mmd]`.
 
-The bot registers one global command and does not overwrite other commands. If
-the application already has a different global `/embed` command, the bot leaves
-it untouched and reports the conflict in its workflow log. New global commands
-can take some time to appear in Discord.
+The bot does not register slash commands. On startup, it removes the matching
+global `/embed video` slash command previously created by this bot, if present.
+Other application commands are left unchanged.
 
 ## Configuration
 
@@ -28,8 +28,11 @@ can take some time to appear in Discord.
 - Optional environment variable: `IWARA_PROXY_BASE_URL` (defaults to
   `https://iwara-proxy.steam8632.workers.dev`)
 
-Search queries and signed IWARA URLs are not written to logs. Signed URLs are
-short-lived and should not be shared separately from the proxy link.
+The Cloudflare Worker is called by posting its public HTTPS URL with the signed
+IWARA URL encoded as the `url` parameter; no Cloudflare credential is required
+for the Worker endpoint described in the project notes. Search queries and
+signed IWARA URLs are not written to logs. Signed URLs are short-lived and
+should not be shared separately from the proxy link.
 
 ## Run locally
 

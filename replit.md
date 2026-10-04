@@ -1,6 +1,6 @@
 # Discord IWARA Video Bot
 
-Discord bot that searches IWARA with `/embed video query:<words>` and replies with a video link served through the existing Cloudflare Worker.
+Discord bot that recognizes the plain-text message `/embed video [words]`, searches IWARA, and replies with a video link served through the existing Cloudflare Worker.
 
 ## Run & Operate
 
@@ -15,20 +15,21 @@ Discord bot that searches IWARA with `/embed video query:<words>` and replies wi
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
-- Bot: discord.js with a gateway connection and global slash-command registration
+- Bot: discord.js with a gateway connection and plain-text message recognition
 - IWARA lookup: public video search and detail endpoints
 - Video preview: existing Cloudflare Worker; the bot passes through the signed URL without downloading the media
 
 ## Where things live
 
 - `artifacts/discord-bot/src/iwara.ts` — IWARA search, detail lookup, and Worker-link construction
-- `artifacts/discord-bot/src/index.ts` — Discord client and `/embed video` command
+- `artifacts/discord-bot/src/index.ts` — Discord client and plain-text command handler
 - `artifacts/discord-bot/README.md` — Discord application setup and run instructions
 
 ## Architecture decisions
 
 - The bot runs as its own workflow, separate from the API server.
-- Slash-command registration only creates `/embed` when it does not already exist; a conflicting command is left untouched.
+- Do not register slash commands; the bot recognizes ordinary message text only.
+- Discord's Message Content privileged intent must be enabled for the bot application.
 - Signed URLs are passed through the Worker and are not logged or persisted.
 
 ## Product
@@ -37,12 +38,12 @@ Discord bot that searches IWARA with `/embed video query:<words>` and replies wi
 
 ## User preferences
 
-Keep the existing Cloudflare Worker behavior unchanged; its range streaming and Discord playback are already confirmed to work.
+Keep the existing Cloudflare Worker behavior unchanged; its range streaming and Discord playback are already confirmed to work. Use a plain-text Discord message, never a slash command.
 
 ## Gotchas
 
-- Discord global slash commands can take some time to become available after registration.
-- Install the bot with both `bot` and `applications.commands` scopes and permission to send messages.
+- Enable Discord's Message Content Intent in the Developer Portal or the bot cannot see message text.
+- Install the bot with the `bot` scope and permission to view channels and send messages.
 
 ## Pointers
 
