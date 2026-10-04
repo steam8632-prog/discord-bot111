@@ -133,12 +133,8 @@ async function handleMessage(message: Message): Promise<void> {
       return;
     }
 
-    const safeTitle = video.title
-      .replace(/([\\_*~`|])/g, "\\$1")
-      .slice(0, 180);
-
     await reply.edit({
-      content: `**${safeTitle}**\n${video.proxyUrl}\nSource: <${video.sourceUrl}>`,
+      content: video.proxyUrl,
       allowedMentions: { parse: [] },
     });
   } catch (error) {

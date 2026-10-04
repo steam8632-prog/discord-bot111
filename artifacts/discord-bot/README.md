@@ -1,8 +1,8 @@
 # Discord IWARA video bot
 
 The bot watches ordinary Discord messages for `/embed video [search words]`.
-It searches IWARA, loads the first video's details, and posts the signed file
-URL through the existing Cloudflare Worker. The bot does not download or store
+It searches IWARA, resolves the first video's playable source URL, and posts
+only the resulting Cloudflare Worker link. The bot does not download or store
 video files.
 
 ## Setup

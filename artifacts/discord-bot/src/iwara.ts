@@ -31,6 +31,11 @@ interface IwaraVideoDetails {
   fileUrl?: string | null;
 }
 
+interface IwaraPlayableSource {
+  name: string;
+  viewUrl: string;
+}
+
 export interface IwaraVideoLink {
   title: string;
   sourceUrl: string;
@@ -151,30 +156,93 @@ function parseVideoDetails(payload: unknown): IwaraVideoDetails {
   };
 }
 
-function getSignedVideoUrl(value: string | null | undefined): string {
+function parsePlayableSources(payload: unknown): IwaraPlayableSource[] {
+  if (!Array.isArray(payload)) {
+    throw new IwaraLookupError("IWARA returned unexpected video sources.");
+  }
+
+  return payload.flatMap((entry): IwaraPlayableSource[] => {
+    if (!isRecord(entry) || !isRecord(entry["src"])) {
+      return [];
+    }
+
+    const viewUrl = entry["src"]["view"];
+    if (typeof viewUrl !== "string") {
+      return [];
+    }
+
+    return [
+      {
+        name: typeof entry["name"] === "string" ? entry["name"] : "",
+        viewUrl,
+      },
+    ];
+  });
+}
+
+function getSourcePriority(name: string): number {
+  const normalized = name.trim().toLowerCase();
+  if (normalized === "source") {
+    return 0;
+  }
+
+  const resolution = normalized.match(/(\d{3,4})p?/);
+  if (resolution) {
+    return 10_000 - Number(resolution[1]);
+  }
+
+  return normalized.includes("preview") ? 20_000 : 15_000;
+}
+
+function validateIwaraUrl(url: URL): URL {
+  if (
+    url.protocol !== "https:" ||
+    !url.hostname.toLowerCase().endsWith(".iwara.tv")
+  ) {
+    throw new IwaraLookupError(
+      "IWARA returned a video link from an unexpected host.",
+    );
+  }
+  return url;
+}
+
+async function getSignedVideoUrl(
+  value: string | null | undefined,
+): Promise<string> {
   if (!value) {
     throw new IwaraLookupError(
       "The first result does not have a public video link.",
     );
   }
 
-  let signedUrl: URL;
+  let fileUrl: URL;
   try {
-    signedUrl = new URL(value);
+    fileUrl = validateIwaraUrl(new URL(value, IWARA_SITE_BASE));
   } catch {
     throw new IwaraLookupError("IWARA returned an invalid video link.");
   }
 
-  if (
-    signedUrl.protocol !== "https:" ||
-    !signedUrl.hostname.toLowerCase().endsWith(".iwara.tv")
-  ) {
+  if (fileUrl.pathname !== "/file" && !fileUrl.pathname.startsWith("/file/")) {
+    return fileUrl.toString();
+  }
+
+  const sources = parsePlayableSources(await fetchJson(fileUrl));
+  const selectedSource = sources
+    .sort((left, right) => getSourcePriority(left.name) - getSourcePriority(right.name))[0];
+
+  if (!selectedSource) {
     throw new IwaraLookupError(
-      "IWARA returned a video link from an unexpected host.",
+      "IWARA did not provide a playable source for this video.",
     );
   }
 
-  return signedUrl.toString();
+  try {
+    return validateIwaraUrl(
+      new URL(selectedSource.viewUrl, IWARA_SITE_BASE),
+    ).toString();
+  } catch {
+    throw new IwaraLookupError("IWARA returned an invalid video link.");
+  }
 }
 
 function buildProxyUrl(signedUrl: string): string {
@@ -220,7 +288,7 @@ export async function findFirstVideo(query: string): Promise<IwaraVideoLink | nu
     IWARA_API_BASE,
   );
   const details = parseVideoDetails(await fetchJson(detailUrl));
-  const signedUrl = getSignedVideoUrl(details.fileUrl);
+  const signedUrl = await getSignedVideoUrl(details.fileUrl);
   const id = details.id || firstResult.id;
   const title = details.title || firstResult.title;
   const slug = details.slug || firstResult.slug;
