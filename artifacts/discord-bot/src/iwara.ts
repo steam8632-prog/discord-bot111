@@ -1,6 +1,10 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 const IWARA_API_BASE = "https://api.iwara.tv";
 const IWARA_SITE_BASE = "https://www.iwara.tv";
 const DEFAULT_PROXY_BASE = "https://iwara-proxy.steam8632.workers.dev";
+const execFileAsync = promisify(execFile);
 
 const API_HEADERS = {
   Accept: "application/json",
@@ -45,24 +49,58 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 async function fetchJson(url: URL): Promise<unknown> {
-  let response: Response;
+  let output: string;
   try {
-    response = await fetch(url, {
-      headers: API_HEADERS,
-      signal: AbortSignal.timeout(12_000),
-    });
+    const result = await execFileAsync(
+      "curl",
+      [
+        "--silent",
+        "--show-error",
+        "--connect-timeout",
+        "5",
+        "--max-time",
+        "12",
+        "--user-agent",
+        API_HEADERS["User-Agent"],
+        "--header",
+        `Accept: ${API_HEADERS.Accept}`,
+        "--header",
+        `Origin: ${API_HEADERS.Origin}`,
+        "--header",
+        `Referer: ${API_HEADERS.Referer}`,
+        "--write-out",
+        "\n__IWARA_HTTP_STATUS__:%{http_code}",
+        "--url",
+        url.toString(),
+      ],
+      {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    );
+    output = result.stdout;
   } catch {
     throw new IwaraLookupError("IWARA is not responding right now.");
   }
 
-  if (!response.ok) {
+  const statusMatch = output.match(/\n__IWARA_HTTP_STATUS__:(\d{3})\s*$/);
+  if (!statusMatch || statusMatch.index === undefined) {
+    throw new IwaraLookupError("IWARA returned an unreadable response.");
+  }
+
+  const status = Number(statusMatch[1]);
+  const body = output.slice(0, statusMatch.index);
+  if (status < 200 || status >= 300) {
+    if (status === 403) {
+      throw new IwaraLookupError("IWARA zablokovala API požiadavku (HTTP 403).");
+    }
     throw new IwaraLookupError(
-      `IWARA returned an error (HTTP ${response.status}).`,
+      `IWARA returned an error (HTTP ${status}).`,
     );
   }
 
   try {
-    return await response.json();
+    return JSON.parse(body) as unknown;
   } catch {
     throw new IwaraLookupError("IWARA returned an unreadable response.");
   }

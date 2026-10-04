@@ -30,6 +30,7 @@ Discord bot that recognizes the plain-text message `/embed video [words]`, searc
 - The bot runs as its own workflow, separate from the API server.
 - Do not register slash commands; the bot recognizes ordinary message text only.
 - Discord's Message Content privileged intent must be enabled for the bot application.
+- Use `curl` for IWARA API requests; Node's built-in `fetch` receives a Cloudflare challenge (HTTP 403) in this environment.
 - Signed URLs are passed through the Worker and are not logged or persisted.
 
 ## Product

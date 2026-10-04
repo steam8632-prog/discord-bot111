@@ -27,6 +27,9 @@ Other application commands are left unchanged.
 - Required secret: `DISCORD_BOT_TOKEN`
 - Optional environment variable: `IWARA_PROXY_BASE_URL` (defaults to
   `https://iwara-proxy.steam8632.workers.dev`)
+- The runtime needs `curl` available on `PATH`; it is used for IWARA API
+  requests because Node's built-in HTTP client can receive a Cloudflare
+  anti-bot challenge instead of the API response.
 
 The Cloudflare Worker is called by posting its public HTTPS URL with the signed
 IWARA URL encoded as the `url` parameter; no Cloudflare credential is required

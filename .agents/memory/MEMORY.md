@@ -1,1 +1,2 @@
 - [Workspace dependency installs](workspace-dependency-installs.md) — target pnpm package installs explicitly in this monorepo.
+- [IWARA API transport](iwara-api-transport.md) — Node `fetch` hits a Cloudflare 403 challenge; system `curl` with browser headers returns API JSON.

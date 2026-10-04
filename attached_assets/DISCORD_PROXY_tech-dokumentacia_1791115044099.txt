@@ -1,0 +1,806 @@
+Technická dokumentácia, post-mortem a troubleshooting runbook
+Stav: funkčné / overené
+Výsledok: Discord video embed a prehrávanie fungujú vrátane seekovania a zastavenia
+Typ riešenia: Cloudflare Worker ako video proxy
+Finálny endpoint: /video.mp4?url=<encoded signed URL>
+
+1. Executive summary
+Cieľom bolo dostať video zo signed Iwara URL cez vlastný Cloudflare Worker tak, aby výsledný URL fungoval priamo v Discorde ako video.
+
+Samotné stiahnutie videa nebolo jediným problémom. Kľúčové bolo zabezpečiť, aby proxy správne spolupracovala s tým, ako Discord video spracováva.
+
+Výsledný tok je:
+
+Iwara
+  │
+  │ signed video URL
+  ▼
+Cloudflare Worker
+  │
+  │ fetch()
+  │
+  │ HTTP Range
+  ▼
+Iwara video server
+  │
+  │ 206 Partial Content
+  ▼
+Cloudflare Worker
+  │
+  ▼
+Discord preview / media worker
+  │
+  ▼
+Discord video player
+
+Finálne testy potvrdili:
+
+Discord vytvorí video preview.
+
+Video sa začne prehrávať.
+
+Video sa prehrá celé.
+
+Funguje seek / preskočenie na inú časť videa.
+
+Funguje pause / stop.
+
+Discord používa Range requesty.
+
+Upstream vracia video/mp4.
+
+Worker správne prenáša 206 Partial Content.
+
+Proxy nevyžaduje ďalšie náhodné úpravy hlavičiek.
+
+2. Pôvodný problém
+Iwara používa signed video URL.
+
+Príklad pôvodného URL:
+
+https://acheron.iwara.tv/view?hash=...&filename=...&path=2026%2F10%2F01&expires=...
+
+Toto URL obsahuje parametre potrebné na autorizovaný prístup k videu.
+
+Pre Discord sa URL neposiela priamo. Najprv sa vloží ako hodnota parametra url Worker endpointu:
+
+https://iwara-proxy.steam8632.workers.dev/video.mp4?url=<encoded-signed-url>
+
+Preto je potrebné správne URL encoding.
+
+3. URL encoding
+Použitá logika bola:
+
+encodeURIComponent(signedUrl)
+
+Napríklad:
+
+https://acheron.iwara.tv/view?hash=ABC&filename=file.mp4&path=2026%2F10%2F01&expires=123
+
+sa po encodeURIComponent() stane približne:
+
+https%3A%2F%2Facheron.iwara.tv%2Fview%3Fhash%3DABC%26filename%3Dfile.mp4%26path%3D2026%252F10%252F01%26expires%3D123
+
+Dôležitý detail:
+
+%2F
+
+vo vnútri pôvodného signed URL sa po ďalšom encodingu stane:
+
+%252F
+
+To nie je chyba.
+
+Je to dôsledok toho, že % je samo o sebe znak, ktorý sa pri obalení celého URL musí zakódovať.
+
+4. Prečo sa v Trace objavuje %252F
+Pôvod:
+
+path=2026%2F10%2F01
+
+Po zakódovaní celého signed URL:
+
+path%3D2026%252F10%252F01
+
+Po následnom spracovaní query parametra Workerom sa hodnota opäť interpretuje ako:
+
+path=2026%2F10%2F01
+
+Toto bolo dôležité rozlíšenie:
+
+%252F
+
+v obalenej URL nemusí znamenať poškodenú URL.
+
+Je potrebné sledovať, čo dostane Worker po parsovaní query parametra.
+
+5. Cloudflare Worker
+Worker poskytuje endpoint:
+
+/video.mp4
+
+a signed Iwara URL dostáva ako:
+
+?url=...
+
+Základná úloha Workera je:
+
+prijať request,
+
+získať parameter url,
+
+vytvoriť upstream request,
+
+zachovať relevantné vlastnosti requestu, najmä Range,
+
+fetchnúť video zo signed Iwara URL,
+
+vrátiť odpoveď klientovi,
+
+zachovať video metadata potrebné na prehrávanie.
+
+Worker teda nie je video server v klasickom zmysle. Je to HTTP proxy medzi Discordom a Iwarou.
+
+6. Najdôležitejšie zistenie: Discord neposiela iba jeden typ requestu
+Počas debugovania sa ukázalo, že Discord používa viacero requestov.
+
+To bolo veľmi dôležité.
+
+6.1 Discord preview request
+Pri vložení URL Discord poslal request napríklad s:
+
+User-Agent: Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)
+
+Worker následne zaznamenal:
+
+proxyType: discord-preview
+upstreamRange: bytes=0-5242879
+targetHost: herta.iwara.tv
+
+Upstream odpovedal:
+
+Content-Type: video/mp4
+Content-Length: 5242880
+Content-Range: bytes 0-5242879/65117390
+Status: 206
+
+Toto znamená:
+
+Discord si vypýtal prvých 5 MiB.
+
+Upstream ich poskytol.
+
+Worker odpoveď úspešne preniesol.
+
+Discord dokázal zistiť, že ide o MP4.
+
+Discord mohol vytvoriť video preview.
+
+7. Druhý request od Discordu
+Pri druhom requeste bol opäť:
+
+User-Agent: Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)
+
+ale správanie bolo opäť identifikované ako:
+
+proxyType: discord-preview
+
+a upstream dostal:
+
+Range: bytes=0-5242879
+
+Výsledok:
+
+206 Partial Content
+
+s:
+
+Content-Range: bytes 0-5242879/65117390
+
+To ukázalo, že opakovaný request nie je automaticky chyba.
+
+Discord môže rovnakú časť videa vyžiadať opakovane.
+
+8. Skutočné prehrávanie videa
+Najdôležitejší test bol samotný playback.
+
+Trace obsahoval:
+
+User-Agent:
+Mozilla/5.0 (Macintosh; Intel Mac OS X 10.10; rv:38.0) Gecko/20100101 Firefox/38.0
+
+a:
+
+Range: bytes=0-
+
+Zároveň boli prítomné:
+
+cf-worker: discordapp.net
+x-discord-caller: media-worker
+
+To je veľmi cenná informácia.
+
+Ukazuje, že po preview fáze Discord používa svoju media pipeline.
+
+9. Výsledok playback requestu
+Upstream odpovedal:
+
+Content-Type: video/mp4
+Content-Length: 93219346
+Content-Range: bytes 0-93219345/93219346
+Status: 206
+
+Teda celé video:
+
+93 219 346 bytes
+
+bolo dostupné cez Range response.
+
+Následný používateľský test potvrdil:
+
+video sa prehralo celé,
+
+prehrávanie sa nezaseklo,
+
+bolo možné zastaviť ho,
+
+bolo možné preskočiť na inú časť,
+
+prehrávač fungoval normálne.
+
+Tým bol potvrdený celý reťazec:
+
+Discord
+  ↓
+Worker
+  ↓
+Iwara
+  ↓
+Worker
+  ↓
+Discord
+  ↓
+Player
+
+10. HTTP 206 je kľúčový
+Pri video proxy je veľmi dôležité rozlišovať:
+
+200 OK
+
+a:
+
+206 Partial Content
+
+206 znamená, že server poskytuje požadovaný byte range.
+
+Napríklad:
+
+Range: bytes=0-5242879
+
+spôsobí:
+
+206 Partial Content
+Content-Range: bytes 0-5242879/65117390
+
+Discord tak môže načítať iba časť videa.
+
+Neskôr môže požiadať napríklad o inú časť.
+
+To je základ pre efektívne:
+
+streaming,
+
+seekovanie,
+
+načítavanie videa podľa potreby,
+
+prácu prehrávača s veľkým MP4 súborom.
+
+11. Prečo bol Range test rozhodujúci
+Keby proxy fungovala iba ako:
+
+GET → stiahni celé video → vráť celé video
+
+mohlo by to fungovať pri jednoduchom prehrávaní, ale nebolo by to správne riešenie pre klienta, ktorý používa byte ranges.
+
+Discord media pipeline očividne s Range pracuje.
+
+Preto bolo rozhodujúce sledovať:
+
+request Range
+        ↓
+upstream Range
+        ↓
+upstream 206
+        ↓
+response 206
+
+Keď tento reťazec fungoval, prehrávanie sa začalo správať normálne.
+
+12. Dôležitá diagnostická technika
+Jedna z najdôležitejších lessons learned:
+
+Nemenili sme hlavičky donekonečna naslepo. Najprv sme sa pozreli, čo reálne Discord posiela.
+
+Trace poskytol objektívne informácie:
+
+User-Agent
+Range
+cf-worker
+x-discord-caller
+Accept
+Accept-Encoding
+
+a následne:
+
+upstreamStatus
+upstreamContentType
+upstreamContentLength
+upstreamContentRange
+
+To umožnilo oddeliť problém:
+
+Discord request
+
+od:
+
+Worker
+
+od:
+
+Iwara upstream
+
+13. Význam outcome: canceled
+V skoršom teste sa objavilo:
+
+"outcome": "canceled"
+
+a zároveň:
+
+upstreamStatus: 200
+
+To bolo dôležité.
+
+Neznamenalo to automaticky:
+
+Iwara zlyhala
+
+ani:
+
+Worker nevie video načítať
+
+Request mohol byť ukončený klientom alebo upstream pipeline skôr, než Worker dokončil celú operáciu.
+
+Preto bolo potrebné pozerať na celý Trace, nie iba na jednu hodnotu.
+
+Neskôr pri funkčnom Discord requeste sme dostali:
+
+"outcome": "ok"
+
+čo poskytlo oveľa silnejší dôkaz, že celý request skončil úspešne.
+
+14. Testovanie cez reálneho klienta
+Jednoduchý HTTP test nestačil.
+
+Kľúčový bol test:
+
+vložiť proxy URL do Discordu
+
+a sledovať:
+
+preview request,
+
+upstream request,
+
+HTTP status,
+
+následný media request,
+
+prehrávanie,
+
+seek,
+
+dokončenie videa.
+
+Toto je dôležitá zásada pre budúcnosť:
+
+Ak cieľovým klientom je Discord, finálny test musí byť vykonaný cez Discord.
+
+Nie iba:
+
+curl URL
+
+alebo otvorenie URL v obyčajnom browseri.
+
+15. Čo sme zistili o hlavičkách
+Počas riešenia sa experimentovalo s HTTP hlavičkami.
+
+Najdôležitejší záver bol:
+
+Nie je potrebné mechanicky kopírovať všetky Discord hlavičky na Iwaru.
+
+Dôležitejšie je správne spracovanie requestu a najmä Range.
+
+Trace ukázal, že funkčné requesty obsahujú napríklad:
+
+Range: bytes=0-5242879
+
+alebo:
+
+Range: bytes=0-
+
+a upstream korektne odpovedá 206.
+
+Preto ďalšie náhodné úpravy hlavičiek po dosiahnutí funkčného stavu nemajú pridanú hodnotu.
+
+16. Debug logging
+Debug logging sa ukázal ako veľmi užitočný.
+
+Príklady užitočných údajov:
+
+proxyType
+targetHost
+upstreamRange
+upstreamStatus
+upstreamContentType
+upstreamContentLength
+upstreamContentRange
+
+Tieto hodnoty umožňujú rýchlo zistiť:
+
+Kto request poslal?
+Kam Worker išiel?
+Aký Range použil?
+Čo vrátil upstream?
+Čo Worker vrátil klientovi?
+
+17. Signed URL v logoch
+Počas debugovania sa v Trace objavovali signed URL obsahujúce napríklad:
+
+hash=...
+filename=...
+path=...
+expires=...
+
+Technicky je to veľmi užitočné pri debugovaní.
+
+Zároveň však signed URL môže byť dočasným prístupovým tokenom.
+
+Pre produkčné logovanie je preto vhodnejšie:
+
+targetHost=herta.iwara.tv
+proxyType=discord-preview
+range=bytes=0-5242879
+status=206
+contentLength=5242880
+filename=...
+
+a nie:
+
+https://herta.iwara.tv/view?hash=...&expires=...
+
+Ak debug zostáva zapnutý, najbezpečnejšie je maskovať:
+
+hash
+expires
+
+a podľa potreby ďalšie citlivé query parametre.
+
+18. Výkon
+Trace ukázal veľmi nízku CPU záťaž Workera.
+
+Príklady:
+
+wallTimeMs: ~525 ms
+cpuTimeMs: 2 ms
+
+a v inom requeste približne:
+
+wallTimeMs: ~545 ms
+cpuTimeMs: 2 ms
+
+To znamená, že Workerova vlastná JS logika predstavuje iba malú časť celkového času.
+
+Dominantná operácia je sieťový prenos:
+
+Discord
+   ↕
+Cloudflare
+   ↕
+Iwara
+
+Preto samotný debug logging v rozsahu použitom počas testovania nepredstavoval podľa Trace výraznú CPU záťaž.
+
+19. Čo sa ukázalo ako omyl
+Omyl 1: Sústreďovať sa iba na hlavičky
+Spočiatku bolo lákavé skúšať rôzne kombinácie:
+
+User-Agent
+Referer
+Accept
+Accept-Encoding
+
+Bez presného pozorovania reálneho requestu však takéto zmeny ľahko vedú k slepému ladeniu.
+
+Riešenie
+Použiť Trace a pozorovať skutočné Discord requesty.
+
+20. Omyl 2: Predpokladať jeden Discord request
+Discord nepoužíva jediný jednoduchý request.
+
+Má minimálne rozdiel medzi:
+
+preview
+
+a:
+
+media playback
+
+Riešenie
+Identifikovať jednotlivé requesty podľa:
+
+User-Agent
+Range
+cf-worker
+x-discord-caller
+
+a podľa následného upstream správania.
+
+21. Omyl 3: Považovať 200 za automaticky správny výsledok
+Pre jednoduchý download môže byť:
+
+200 OK
+
+úplne v poriadku.
+
+Pre video prehrávanie cez klienta, ktorý používa Range, však nie je samotný 200 dostatočný dôkaz správneho správania.
+
+Riešenie
+Kontrolovať:
+
+206 Partial Content
+Content-Range
+Content-Length
+
+22. Omyl 4: Považovať canceled za dôkaz zlyhania upstreamu
+canceled bolo potrebné interpretovať v kontexte celého Trace.
+
+Riešenie
+Porovnať:
+
+request
+upstream response
+Worker response
+outcome
+
+a následne testovať reálnym klientom.
+
+23. Omyl 5: Pokračovať v zmenách po dosiahnutí funkčného stavu
+Keď už:
+
+Discord embed funguje,
+
+video sa prehráva,
+
+seek funguje,
+
+video sa prehrá celé,
+
+ďalšie experimenty môžu skôr zaviesť regresiu.
+
+Riešenie
+Použiť pravidlo:
+
+Keď je celý end-to-end tok potvrdený, už nemeníme správanie bez konkrétneho dôvodu.
+
+24. Finálny funkčný stav
+Aktuálne potvrdené správanie:
+
+Iwara signed URL
+       ↓
+URL encoding
+       ↓
+Cloudflare Worker
+       ↓
+upstream fetch
+       ↓
+Range handling
+       ↓
+206 Partial Content
+       ↓
+Discord preview
+       ↓
+Discord media worker
+       ↓
+video player
+
+Test potvrdil:
+
+✓ embed
+✓ video detection
+✓ playback
+✓ full playback
+✓ pause/stop
+✓ seek
+✓ Range
+✓ 206
+✓ video/mp4
+✓ upstream transfer
+✓ Worker response
+
+25. Praktický troubleshooting runbook
+Ak by sa problém v budúcnosti zopakoval:
+
+Krok 1 — Skontrolovať URL
+Overiť, že signed URL obsahuje:
+
+hash
+filename
+path
+expires
+
+a že pri vložení do Worker URL je správne encoded.
+
+Krok 2 — Skontrolovať Worker request
+V Trace:
+
+method = GET
+path = /video.mp4
+
+a overiť, že existuje:
+
+url=...
+
+Krok 3 — Skontrolovať target host
+Napríklad:
+
+targetHost = herta.iwara.tv
+
+Ak host vyzerá nesprávne, problém je pravdepodobne v URL parsing/encoding.
+
+Krok 4 — Skontrolovať Range
+Pri Discord preview očakávať niečo podobné:
+
+bytes=0-5242879
+
+Pri prehrávaní sa môže objaviť napríklad:
+
+bytes=0-
+
+Krok 5 — Skontrolovať upstream
+Potrebujeme:
+
+upstreamContentType = video/mp4
+
+a pri Range:
+
+upstreamStatus = 206
+
+Krok 6 — Skontrolovať Content-Range
+Napríklad:
+
+bytes 0-5242879/65117390
+
+alebo:
+
+bytes 0-93219345/93219346
+
+Krok 7 — Skontrolovať Worker response
+Worker musí klientovi vrátiť korektnú HTTP odpoveď, nie iba úspešný fetch vo vnútri.
+
+Krok 8 — Otestovať priamo v Discorde
+Nie iba browser.
+
+Testovať:
+
+1. vložiť URL
+2. počkať na preview
+3. spustiť video
+4. preskočiť dopredu
+5. vrátiť sa dozadu
+6. zastaviť
+7. nechať video dohrať
+
+26. Diagnostická matica
+Pozorovanie	Pravdepodobná oblasť
+Worker nedostane url	URL / query parsing
+Nesprávny targetHost	encoding / parsing
+Upstream 403	signed URL / autorizácia / upstream
+Upstream 200 pri Range	Range forwarding
+Upstream 206, ale Discord nehrá	Worker response headers/body
+Preview funguje, playback nie	media request / Range handling
+Playback funguje, seek nie	Range / Content-Range
+Video sa začne a zastaví	stream/Range/upstream problém
+outcome=canceled	request bol prerušený; treba sledovať celý trace
+video/mp4 + 206 + správny range	základný video transport funguje
+
+27. Čo si zapamätať
+Najdôležitejšie poznatky z celého riešenia:
+
+1. Signed URL nie je obyčajný URL string
+Pri jeho vložení do ďalšieho query parametra je potrebné správne URL encoding.
+
+2. %252F nemusí byť chyba
+Môže ísť o správny výsledok dvojitej vrstvy URL encodingu.
+
+3. Discord má viac fáz
+Preview request a playback request nemožno automaticky považovať za rovnakú operáciu.
+
+4. Video proxy musí rešpektovať Range
+Pri prehrávaní je Range podstatný.
+
+5. 206 Partial Content je veľmi dôležitý signál
+Ukazuje, že byte-range mechanizmus funguje.
+
+6. Content-Range treba kontrolovať spolu s 206
+Samotný status nestačí.
+
+7. Trace je lepší než hádanie
+Najprv pozorovať:
+
+request → upstream → response
+
+a až potom meniť kód.
+
+8. End-to-end test je rozhodujúci
+Úspešný fetch() ešte neznamená, že Discord video prehrá.
+
+9. Seek je silnejší test než obyčajné spustenie
+Ak funguje seek, je to veľmi dobrý dôkaz, že Range pipeline funguje.
+
+10. Po úspechu už zbytočne nemeníme fungujúcu implementáciu
+Najmä nie hlavičky bez konkrétneho problému.
+
+28. Finálny záver
+Riešenie je úspešne overené v reálnom Discord prostredí.
+
+Najdôležitejšie nebolo „prinútiť Worker stiahnuť MP4“, ale zabezpečiť kompatibilný HTTP tok:
+
+signed URL
+   ↓
+správne encoding
+   ↓
+Worker
+   ↓
+Range-aware upstream request
+   ↓
+Iwara 206
+   ↓
+Worker 206
+   ↓
+Discord
+   ↓
+media worker
+   ↓
+video player
+
+Konečný test potvrdil celý reťazec prakticky, nie iba teoreticky:
+
+Discord embed       ✓
+Preview             ✓
+MP4 detection       ✓
+Playback            ✓
+Full playback       ✓
+Pause/stop          ✓
+Seek                ✓
+Range requests      ✓
+HTTP 206            ✓
+Upstream MP4        ✓
+
+Stav: JOB DONE. 🥳
+
+29. Krátka verzia pre budúce použitie
+Ak sa k projektu vrátime o pol roka, treba si najprv pozrieť iba toto:
+
+1. Je signed URL správne encoded?
+2. Dostane Worker správny targetHost?
+3. Zachováva sa Range?
+4. Vracia upstream 206?
+5. Má response správny Content-Range?
+6. Je Content-Type video/mp4?
+7. Funguje preview v Discorde?
+8. Funguje samotné prehrávanie?
+9. Funguje seek?
+10. Ak áno → nič ďalšie nemeníme.
+
+To je jadro celého riešenia.
