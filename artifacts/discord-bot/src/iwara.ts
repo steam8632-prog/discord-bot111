@@ -10,6 +10,7 @@ const API_HEADERS = {
   Accept: "application/json",
   Origin: IWARA_SITE_BASE,
   Referer: `${IWARA_SITE_BASE}/search`,
+  "X-Site": new URL(IWARA_SITE_BASE).hostname,
   "User-Agent":
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
 };
@@ -18,6 +19,7 @@ interface IwaraSearchItem {
   id: string;
   slug?: string | null;
   title: string;
+  private: boolean;
 }
 
 interface IwaraSearchResponse {
@@ -43,7 +45,10 @@ export interface IwaraVideoLink {
 }
 
 export class IwaraLookupError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
     super(message);
     this.name = "IwaraLookupError";
   }
@@ -73,6 +78,8 @@ async function fetchJson(url: URL): Promise<unknown> {
         `Origin: ${API_HEADERS.Origin}`,
         "--header",
         `Referer: ${API_HEADERS.Referer}`,
+        "--header",
+        `X-Site: ${API_HEADERS["X-Site"]}`,
         "--write-out",
         "\n__IWARA_HTTP_STATUS__:%{http_code}",
         "--url",
@@ -96,11 +103,28 @@ async function fetchJson(url: URL): Promise<unknown> {
   const status = Number(statusMatch[1]);
   const body = output.slice(0, statusMatch.index);
   if (status < 200 || status >= 300) {
+    let code: string | undefined;
+    try {
+      const payload: unknown = JSON.parse(body);
+      if (isRecord(payload) && typeof payload["message"] === "string") {
+        code = payload["message"];
+      }
+    } catch {
+      // The response can be an HTML challenge page rather than JSON.
+    }
+
+    if (code === "errors.privateVideo") {
+      throw new IwaraLookupError("IWARA result is private.", code);
+    }
     if (status === 403) {
-      throw new IwaraLookupError("IWARA zablokovala API požiadavku (HTTP 403).");
+      throw new IwaraLookupError(
+        "IWARA zablokovala API požiadavku (HTTP 403).",
+        code,
+      );
     }
     throw new IwaraLookupError(
       `IWARA returned an error (HTTP ${status}).`,
+      code,
     );
   }
 
@@ -130,6 +154,7 @@ function parseSearchResponse(payload: unknown): IwaraSearchResponse {
       id: entry["id"],
       title: entry["title"],
       slug: typeof entry["slug"] === "string" ? entry["slug"] : null,
+      private: entry["private"] === true,
     });
   }
 
@@ -271,31 +296,46 @@ function buildSourceUrl(id: string, slug?: string | null): string {
 }
 
 export async function findFirstVideo(query: string): Promise<IwaraVideoLink | null> {
-  const searchUrl = new URL("/videos", IWARA_API_BASE);
-  searchUrl.searchParams.set("keyword", query);
+  const searchUrl = new URL("/search", IWARA_API_BASE);
+  searchUrl.searchParams.set("query", query);
+  searchUrl.searchParams.set("type", "videos");
   searchUrl.searchParams.set("sort", "relevance");
   searchUrl.searchParams.set("page", "0");
-  searchUrl.searchParams.set("limit", "1");
+  searchUrl.searchParams.set("limit", "32");
 
   const search = parseSearchResponse(await fetchJson(searchUrl));
-  const firstResult = search.results[0];
-  if (!firstResult) {
-    return null;
+  for (const result of search.results) {
+    if (result.private) {
+      continue;
+    }
+
+    const detailUrl = new URL(
+      `/video/${encodeURIComponent(result.id)}`,
+      IWARA_API_BASE,
+    );
+
+    try {
+      const details = parseVideoDetails(await fetchJson(detailUrl));
+      const signedUrl = await getSignedVideoUrl(details.fileUrl);
+      const id = details.id || result.id;
+      const title = details.title || result.title;
+      const slug = details.slug || result.slug;
+
+      return {
+        title,
+        sourceUrl: buildSourceUrl(id, slug),
+        proxyUrl: buildProxyUrl(signedUrl),
+      };
+    } catch (error) {
+      if (
+        error instanceof IwaraLookupError &&
+        error.code === "errors.privateVideo"
+      ) {
+        continue;
+      }
+      throw error;
+    }
   }
 
-  const detailUrl = new URL(
-    `/video/${encodeURIComponent(firstResult.id)}`,
-    IWARA_API_BASE,
-  );
-  const details = parseVideoDetails(await fetchJson(detailUrl));
-  const signedUrl = await getSignedVideoUrl(details.fileUrl);
-  const id = details.id || firstResult.id;
-  const title = details.title || firstResult.title;
-  const slug = details.slug || firstResult.slug;
-
-  return {
-    title,
-    sourceUrl: buildSourceUrl(id, slug),
-    proxyUrl: buildProxyUrl(signedUrl),
-  };
+  return null;
 }

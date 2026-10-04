@@ -31,16 +31,17 @@ Discord bot that recognizes the plain-text message `/embed video [words]`, searc
 - Do not register slash commands; the bot recognizes ordinary message text only.
 - Discord's Message Content privileged intent must be enabled for the bot application.
 - Use `curl` for IWARA API requests; Node's built-in `fetch` receives a Cloudflare challenge (HTTP 403) in this environment.
+- Match the site's search field with `GET /search?query=<text>&type=videos`, not `/videos?keyword=<text>`.
 - IWARA's `fileUrl` can be a `/file/<id>` resolver returning quality options; use its signed `src.view` URL for the Worker, not the resolver URL.
 - Signed URLs are passed through the Worker and are not logged or persisted.
 
 ## Product
 
-- Search IWARA and post the first result as a Discord video preview through the existing Cloudflare Worker.
+- Search IWARA with the site's video-search endpoint and post the first playable result as a Discord preview through the existing Worker.
 
 ## User preferences
 
-Keep the existing Cloudflare Worker behavior unchanged; its range streaming and Discord playback are already confirmed to work. Use a plain-text Discord message, never a slash command.
+Keep the existing Cloudflare Worker behavior unchanged; its range streaming and Discord playback are already confirmed to work. Use a plain-text Discord message, never a slash command. Post only the proxy URL in Discord, with no title or source link.
 
 ## Gotchas
 

@@ -1,2 +1,2 @@
 - [Workspace dependency installs](workspace-dependency-installs.md) — target pnpm package installs explicitly in this monorepo.
-- [IWARA API and media URLs](iwara-api-transport.md) — use `curl`, then resolve `/file/...` to a signed `/view` URL before sending it through the Worker.
+- [IWARA API and media URLs](iwara-api-transport.md) — use the site's `/search`, skip private hits, and resolve `/file/...` to signed `/view` URLs for the Worker.
