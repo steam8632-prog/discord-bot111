@@ -1,44 +1,48 @@
-# [Project name]
+# Discord IWARA Video Bot
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Discord bot that searches IWARA with `/embed video query:<words>` and replies with a video link served through the existing Cloudflare Worker.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/discord-bot run dev` — run the Discord bot
+- `pnpm --filter @workspace/discord-bot run typecheck` — type-check the bot
+- `pnpm --filter @workspace/api-server run dev` — run the API server
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- Required secret: `DISCORD_BOT_TOKEN`
+- Optional environment variable: `IWARA_PROXY_BASE_URL`
 
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Bot: discord.js with a gateway connection and global slash-command registration
+- IWARA lookup: public video search and detail endpoints
+- Video preview: existing Cloudflare Worker; the bot passes through the signed URL without downloading the media
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/discord-bot/src/iwara.ts` — IWARA search, detail lookup, and Worker-link construction
+- `artifacts/discord-bot/src/index.ts` — Discord client and `/embed video` command
+- `artifacts/discord-bot/README.md` — Discord application setup and run instructions
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- The bot runs as its own workflow, separate from the API server.
+- Slash-command registration only creates `/embed` when it does not already exist; a conflicting command is left untouched.
+- Signed URLs are passed through the Worker and are not logged or persisted.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Search IWARA and post the first result as a Discord video preview through the existing Cloudflare Worker.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+Keep the existing Cloudflare Worker behavior unchanged; its range streaming and Discord playback are already confirmed to work.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Discord global slash commands can take some time to become available after registration.
+- Install the bot with both `bot` and `applications.commands` scopes and permission to send messages.
 
 ## Pointers
 

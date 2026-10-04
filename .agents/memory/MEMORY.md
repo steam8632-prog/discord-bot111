@@ -1,0 +1,1 @@
+- [Workspace dependency installs](workspace-dependency-installs.md) — target pnpm package installs explicitly in this monorepo.
