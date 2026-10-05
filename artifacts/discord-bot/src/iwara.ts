@@ -49,7 +49,9 @@ export interface IwaraVideoLink {
 
 export interface IwaraVideoPageResult {
   video: IwaraVideoLink | null;
-  hasNextPage: boolean;
+  page: number;
+  nextResultIndex: number;
+  hasMoreResults: boolean;
 }
 
 export class IwaraLookupError extends Error {
@@ -317,60 +319,95 @@ function buildSourceUrl(id: string, slug?: string | null): string {
   return `${IWARA_SITE_BASE}/video/${encodeURIComponent(id)}${suffix}`;
 }
 
-export async function findVideoOnSearchPage(
+export async function findNextVideo(
   query: string,
   page: number,
+  resultIndex: number,
+  fetchJsonForLookup: (url: URL) => Promise<unknown> = fetchJson,
 ): Promise<IwaraVideoPageResult> {
-  if (!Number.isInteger(page) || page < 0) {
+  if (
+    !Number.isInteger(page) ||
+    page < 0 ||
+    !Number.isInteger(resultIndex) ||
+    resultIndex < 0
+  ) {
     throw new IwaraLookupError("Invalid IWARA search page.");
   }
 
-  const searchUrl = new URL("/search", IWARA_API_BASE);
-  searchUrl.searchParams.set("query", query);
-  searchUrl.searchParams.set("type", "videos");
-  searchUrl.searchParams.set("sort", "relevance");
-  searchUrl.searchParams.set("page", String(page));
-  searchUrl.searchParams.set("limit", "32");
+  let currentPage = page;
+  let currentResultIndex = resultIndex;
 
-  const search = parseSearchResponse(await fetchJson(searchUrl));
-  const hasNextPage =
-    (search.page + 1) * search.limit < search.count;
+  while (true) {
+    const searchUrl = new URL("/search", IWARA_API_BASE);
+    searchUrl.searchParams.set("query", query);
+    searchUrl.searchParams.set("type", "videos");
+    searchUrl.searchParams.set("sort", "relevance");
+    searchUrl.searchParams.set("page", String(currentPage));
+    searchUrl.searchParams.set("limit", "32");
 
-  for (const result of search.results) {
-    if (result.private) {
-      continue;
+    const search = parseSearchResponse(await fetchJsonForLookup(searchUrl));
+    if (search.page !== currentPage) {
+      throw new IwaraLookupError("IWARA returned an unexpected search page.");
     }
 
-    const detailUrl = new URL(
-      `/video/${encodeURIComponent(result.id)}`,
-      IWARA_API_BASE,
-    );
+    const hasNextPage =
+      (search.page + 1) * search.limit < search.count;
 
-    try {
-      const details = parseVideoDetails(await fetchJson(detailUrl));
-      const signedUrl = await getSignedVideoUrl(details.fileUrl);
-      const id = details.id || result.id;
-      const title = details.title || result.title;
-      const slug = details.slug || result.slug;
-
-      return {
-        video: {
-          title,
-          sourceUrl: buildSourceUrl(id, slug),
-          proxyUrl: buildProxyUrl(signedUrl),
-        },
-        hasNextPage,
-      };
-    } catch (error) {
-      if (
-        error instanceof IwaraLookupError &&
-        error.code === "errors.privateVideo"
-      ) {
+    for (
+      let index = currentResultIndex;
+      index < search.results.length;
+      index += 1
+    ) {
+      const result = search.results[index];
+      if (!result || result.private) {
         continue;
       }
-      throw error;
-    }
-  }
 
-  return { video: null, hasNextPage };
+      const detailUrl = new URL(
+        `/video/${encodeURIComponent(result.id)}`,
+        IWARA_API_BASE,
+      );
+
+      try {
+        const details = parseVideoDetails(await fetchJsonForLookup(detailUrl));
+        const signedUrl = await getSignedVideoUrl(details.fileUrl);
+        const id = details.id || result.id;
+        const title = details.title || result.title;
+        const slug = details.slug || result.slug;
+        const nextResultIndex = index + 1;
+
+        return {
+          video: {
+            title,
+            sourceUrl: buildSourceUrl(id, slug),
+            proxyUrl: buildProxyUrl(signedUrl),
+          },
+          page: currentPage,
+          nextResultIndex,
+          hasMoreResults:
+            nextResultIndex < search.results.length || hasNextPage,
+        };
+      } catch (error) {
+        if (
+          error instanceof IwaraLookupError &&
+          error.code === "errors.privateVideo"
+        ) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (!hasNextPage) {
+      return {
+        video: null,
+        page: currentPage,
+        nextResultIndex: search.results.length,
+        hasMoreResults: false,
+      };
+    }
+
+    currentPage += 1;
+    currentResultIndex = 0;
+  }
 }

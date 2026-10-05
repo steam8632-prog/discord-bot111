@@ -6,7 +6,7 @@ import {
   GatewayIntentBits,
   type Message,
 } from "discord.js";
-import { findVideoOnSearchPage, IwaraLookupError } from "./iwara.js";
+import { findNextVideo, IwaraLookupError } from "./iwara.js";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
 if (!token) {
@@ -23,8 +23,9 @@ const client = new Client({
 
 interface SearchProgress {
   query: string;
-  nextPage: number;
-  hasNextPage: boolean;
+  page: number;
+  nextResultIndex: number;
+  hasMoreResults: boolean;
   updatedAt: number;
 }
 
@@ -179,10 +180,10 @@ async function handleMessage(message: Message): Promise<void> {
     const previousProgress = searchProgress.get(progressKey);
     const sameQuery = previousProgress?.query === normalizedQuery;
 
-    if (sameQuery && previousProgress && !previousProgress.hasNextPage) {
+    if (sameQuery && previousProgress && !previousProgress.hasMoreResults) {
       searchProgress.delete(progressKey);
       await reply.edit(
-        "Prešiel som všetky podstránky tohto vyhľadávania. Ďalší príkaz začne znova od prvej.",
+        "Prešiel som všetky výsledky tohto vyhľadávania. Ďalší príkaz začne znova od prvej.",
       );
       return;
     }
@@ -191,24 +192,28 @@ async function handleMessage(message: Message): Promise<void> {
       searchProgress.delete(progressKey);
     }
 
-    const page = sameQuery ? previousProgress.nextPage : 0;
+    const page = sameQuery && previousProgress ? previousProgress.page : 0;
+    const resultIndex =
+      sameQuery && previousProgress
+        ? previousProgress.nextResultIndex
+        : 0;
 
     try {
-      const { video, hasNextPage } = await findVideoOnSearchPage(query, page);
-      const nextProgress: SearchProgress = {
-        query: normalizedQuery,
-        nextPage: page + 1,
-        hasNextPage,
-        updatedAt: Date.now(),
-      };
-
-      if (video || hasNextPage || page > 0) {
-        searchProgress.set(progressKey, nextProgress);
-      } else {
-        searchProgress.delete(progressKey);
-      }
+      const {
+        video,
+        page: resultPage,
+        nextResultIndex,
+        hasMoreResults,
+      } = await findNextVideo(query, page, resultIndex);
 
       if (video) {
+        searchProgress.set(progressKey, {
+          query: normalizedQuery,
+          page: resultPage,
+          nextResultIndex,
+          hasMoreResults,
+          updatedAt: Date.now(),
+        });
         await reply.edit({
           content: video.proxyUrl,
           allowedMentions: { parse: [] },
@@ -216,17 +221,12 @@ async function handleMessage(message: Message): Promise<void> {
         return;
       }
 
-      if (hasNextPage) {
-        await reply.edit(
-          `Na ${page + 1}. podstránke som nenašiel prehrateľné video. Ďalší príkaz pokračuje na ${page + 2}. podstránke.`,
-        );
-        return;
-      }
+      searchProgress.delete(progressKey);
 
       await reply.edit(
-        page === 0
-          ? "Nenašiel som verejne prehrateľné video v tomto vyhľadávaní."
-          : `Na ${page + 1}. podstránke som nenašiel prehrateľné video a ďalšie výsledky už nie sú.`,
+        sameQuery
+          ? "Nenašiel som ďalšie verejne prehrateľné video v tomto vyhľadávaní."
+          : "Nenašiel som verejne prehrateľné video v tomto vyhľadávaní.",
       );
     } catch (error) {
       if (error instanceof IwaraLookupError) {

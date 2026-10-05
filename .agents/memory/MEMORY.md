@@ -1,2 +1,3 @@
 - [Workspace dependency installs](workspace-dependency-installs.md) — target pnpm package installs explicitly in this monorepo.
 - [IWARA API and media URLs](iwara-api-transport.md) — use the site's `/search`, skip private hits, and resolve `/file/...` to signed `/view` URLs for the Worker.
+- [IWARA result order](iwara-result-order.md) — repeated searches advance through results on the current numbered page before moving to the next page.

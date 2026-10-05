@@ -23,6 +23,9 @@ download or store video files.
 The bot does not register slash commands. On startup, it removes the matching
 global `/embed video` slash command previously created by this bot, if present.
 Other application commands are left unchanged.
+Repeating the same search returns the next playable video on the current IWARA
+results page; after its results are exhausted, the bot continues on the next
+numbered page. A different search starts at the first result.
 
 ## Configuration
 
