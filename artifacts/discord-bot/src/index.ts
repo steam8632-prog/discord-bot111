@@ -163,6 +163,7 @@ function parseRefreshCustomId(
 async function sendRefreshButton(
   message: Message,
   videoId: string,
+  videoTitle: string,
 ): Promise<void> {
   try {
     const button = new ButtonBuilder()
@@ -177,7 +178,7 @@ async function sendRefreshButton(
     }
 
     await channel.send({
-      content: "Obnoviť odkaz na toto video:",
+      content: `Obnoviť video ${videoTitle}:`,
       components: [row],
       allowedMentions: { parse: [] },
     });
@@ -295,7 +296,7 @@ async function handleMessage(message: Message): Promise<void> {
           content: video.proxyUrl,
           allowedMentions: { parse: [] },
         });
-        await sendRefreshButton(message, video.videoId);
+        await sendRefreshButton(message, video.videoId, video.title);
         return;
       }
 
