@@ -1,6 +1,53 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { getEmbedRequestKey, parseEmbedCommand } from "./commands.js";
 import { findNextVideo, refreshVideoLink } from "./iwara.js";
+
+test("parses feed commands and short search sort aliases", () => {
+  assert.deepEqual(parseEmbedCommand("/embed trending"), {
+    kind: "feed",
+    sort: "trending",
+  });
+  assert.deepEqual(parseEmbedCommand("/embed popularity"), {
+    kind: "feed",
+    sort: "popularity",
+  });
+  assert.deepEqual(parseEmbedCommand("/embed video wuwa"), {
+    kind: "search",
+    query: "wuwa",
+    sort: "relevance",
+  });
+  assert.deepEqual(parseEmbedCommand("/embed video wuwa recent"), {
+    kind: "search",
+    query: "wuwa",
+    sort: "date",
+  });
+  assert.deepEqual(parseEmbedCommand("/embed video [wuwa] views"), {
+    kind: "search",
+    query: "wuwa",
+    sort: "views",
+  });
+  assert.deepEqual(parseEmbedCommand("/embed video [wuwa] [recent]"), {
+    kind: "search",
+    query: "wuwa",
+    sort: "date",
+  });
+  assert.deepEqual(parseEmbedCommand("/embed video wuwa [likes]"), {
+    kind: "search",
+    query: "wuwa",
+    sort: "likes",
+  });
+  assert.deepEqual(parseEmbedCommand("/embed video wuwa likes"), {
+    kind: "search",
+    query: "wuwa",
+    sort: "likes",
+  });
+  assert.equal(
+    getEmbedRequestKey(parseEmbedCommand("/embed video wuwa recent")!),
+    "search:date:wuwa",
+  );
+  assert.equal(parseEmbedCommand("/embed other"), null);
+});
 
 test("returns each result on a page before advancing to the next page", async () => {
   const pages = [
@@ -22,10 +69,12 @@ test("returns each result on a page before advancing to the next page", async ()
     },
   ];
   const requestedPages: number[] = [];
+  const requestedSorts: string[] = [];
   const fetchJsonForLookup = async (url: URL): Promise<unknown> => {
     if (url.pathname === "/search") {
       const page = Number(url.searchParams.get("page"));
       requestedPages.push(page);
+      requestedSorts.push(url.searchParams.get("sort") ?? "");
       return pages[page];
     }
 
@@ -40,15 +89,16 @@ test("returns each result on a page before advancing to the next page", async ()
     };
   };
 
-  const first = await findNextVideo("test", 0, 0, fetchJsonForLookup);
+  const request = { kind: "search", query: "test", sort: "views" } as const;
+  const first = await findNextVideo(request, 0, 0, fetchJsonForLookup);
   const second = await findNextVideo(
-    "test",
+    request,
     first.page,
     first.nextResultIndex,
     fetchJsonForLookup,
   );
   const third = await findNextVideo(
-    "test",
+    request,
     second.page,
     second.nextResultIndex,
     fetchJsonForLookup,
@@ -69,6 +119,48 @@ test("returns each result on a page before advancing to the next page", async ()
   assert.equal(third.nextResultIndex, 1);
   assert.equal(third.hasMoreResults, false);
   assert.deepEqual(requestedPages, [0, 0, 0, 1]);
+  assert.deepEqual(requestedSorts, ["views", "views", "views", "views"]);
+});
+
+test("loads trending and popularity from the IWARA videos feed", async () => {
+  for (const sort of ["trending", "popularity"] as const) {
+    const requestedUrls: URL[] = [];
+    const fetchJsonForLookup = async (url: URL): Promise<unknown> => {
+      if (url.pathname === "/videos") {
+        requestedUrls.push(url);
+        return {
+          results: [{ id: `video-${sort}`, title: `${sort} video` }],
+          page: 0,
+          limit: 32,
+          count: 1,
+        };
+      }
+
+      const id = url.pathname.split("/").at(-1);
+      if (!id) {
+        throw new Error("Expected a video ID.");
+      }
+      return {
+        id,
+        title: `${sort} video`,
+        fileUrl: `https://files.iwara.tv/${id}.mp4`,
+      };
+    };
+
+    const result = await findNextVideo(
+      { kind: "feed", sort },
+      0,
+      0,
+      fetchJsonForLookup,
+    );
+
+    const requestedUrl = requestedUrls[0];
+    assert.equal(result.video?.videoId, `video-${sort}`);
+    assert.ok(requestedUrl);
+    assert.equal(requestedUrl.pathname, "/videos");
+    assert.equal(requestedUrl.searchParams.get("sort"), sort);
+    assert.equal(requestedUrl.searchParams.has("query"), false);
+  }
 });
 
 test("refreshes the same video with a newly resolved proxy URL", async () => {

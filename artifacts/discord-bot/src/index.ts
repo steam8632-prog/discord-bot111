@@ -16,6 +16,7 @@ import {
   IwaraLookupError,
   refreshVideoLink,
 } from "./iwara.js";
+import { getEmbedRequestKey, parseEmbedCommand } from "./commands.js";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
 if (!token) {
@@ -31,7 +32,7 @@ const client = new Client({
 });
 
 interface SearchProgress {
-  query: string;
+  requestKey: string;
   page: number;
   nextResultIndex: number;
   hasMoreResults: boolean;
@@ -102,23 +103,6 @@ client.once(Events.ClientReady, (readyClient) => {
     );
   });
 });
-
-function getEmbedVideoQuery(content: string): string | null {
-  const match = content.trim().match(/^\/embed\s+video(?:\s+([\s\S]*))?$/i);
-  if (!match) {
-    return null;
-  }
-
-  let query = (match[1] ?? "").trim();
-  if (query.startsWith("[") && query.endsWith("]")) {
-    query = query.slice(1, -1).trim();
-  }
-  return query;
-}
-
-function normalizeSearchQuery(query: string): string {
-  return query.trim().replace(/\s+/g, " ").toLowerCase();
-}
 
 function getSearchProgressKey(message: Message): string {
   return `${message.channelId}:${message.author.id}`;
@@ -238,20 +222,21 @@ async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  const query = getEmbedVideoQuery(message.content);
-  if (query === null) {
+  const request = parseEmbedCommand(message.content);
+  if (!request) {
     return;
   }
 
-  if (!query) {
+  if (request.kind === "search" && !request.query) {
     await message.reply({
-      content: "Použi: `/embed video [vyhľadávanie]`.",
+      content:
+        "Použi: `/embed video [vyhľadávanie] [relevance|recent|views|likes]`, `/embed trending` alebo `/embed popularity`.",
       allowedMentions: { parse: [], repliedUser: false },
     });
     return;
   }
 
-  if (query.length > 100) {
+  if (request.kind === "search" && request.query.length > 100) {
     await message.reply({
       content: "Vyhľadávanie môže mať najviac 100 znakov.",
       allowedMentions: { parse: [], repliedUser: false },
@@ -265,28 +250,28 @@ async function handleMessage(message: Message): Promise<void> {
   });
 
   const progressKey = getSearchProgressKey(message);
-  const normalizedQuery = normalizeSearchQuery(query);
+  const requestKey = getEmbedRequestKey(request);
 
   await runInSearchOrder(progressKey, async () => {
     pruneExpiredSearchProgress();
     const previousProgress = searchProgress.get(progressKey);
-    const sameQuery = previousProgress?.query === normalizedQuery;
+    const sameRequest = previousProgress?.requestKey === requestKey;
 
-    if (sameQuery && previousProgress && !previousProgress.hasMoreResults) {
+    if (sameRequest && previousProgress && !previousProgress.hasMoreResults) {
       searchProgress.delete(progressKey);
       await reply.edit(
-        "Prešiel som všetky výsledky tohto vyhľadávania. Ďalší príkaz začne znova od prvej.",
+        "Prešiel som všetky výsledky. Ďalší príkaz začne znova od prvej.",
       );
       return;
     }
 
-    if (!sameQuery) {
+    if (!sameRequest) {
       searchProgress.delete(progressKey);
     }
 
-    const page = sameQuery && previousProgress ? previousProgress.page : 0;
+    const page = sameRequest && previousProgress ? previousProgress.page : 0;
     const resultIndex =
-      sameQuery && previousProgress
+      sameRequest && previousProgress
         ? previousProgress.nextResultIndex
         : 0;
 
@@ -296,11 +281,11 @@ async function handleMessage(message: Message): Promise<void> {
         page: resultPage,
         nextResultIndex,
         hasMoreResults,
-      } = await findNextVideo(query, page, resultIndex);
+      } = await findNextVideo(request, page, resultIndex);
 
       if (video) {
         searchProgress.set(progressKey, {
-          query: normalizedQuery,
+          requestKey,
           page: resultPage,
           nextResultIndex,
           hasMoreResults,
@@ -317,9 +302,9 @@ async function handleMessage(message: Message): Promise<void> {
       searchProgress.delete(progressKey);
 
       await reply.edit(
-        sameQuery
-          ? "Nenašiel som ďalšie verejne prehrateľné video v tomto vyhľadávaní."
-          : "Nenašiel som verejne prehrateľné video v tomto vyhľadávaní.",
+        sameRequest
+          ? "Nenašiel som ďalšie verejne prehrateľné video v tomto zozname."
+          : "Nenašiel som verejne prehrateľné video v tomto zozname.",
       );
     } catch (error) {
       if (error instanceof IwaraLookupError) {

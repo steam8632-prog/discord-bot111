@@ -48,6 +48,13 @@ export interface IwaraVideoLink {
   proxyUrl: string;
 }
 
+export type IwaraSearchSort = "relevance" | "date" | "views" | "likes";
+export type IwaraFeedSort = "trending" | "popularity";
+
+export type IwaraVideoRequest =
+  | { kind: "search"; query: string; sort: IwaraSearchSort }
+  | { kind: "feed"; sort: IwaraFeedSort };
+
 export interface IwaraVideoPageResult {
   video: IwaraVideoLink | null;
   page: number;
@@ -71,6 +78,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function fetchJson(url: URL): Promise<unknown> {
   let output: string;
+  const referer =
+    url.pathname === "/videos"
+      ? `${IWARA_SITE_BASE}/videos?sort=${encodeURIComponent(
+          url.searchParams.get("sort") ?? "trending",
+        )}`
+      : API_HEADERS.Referer;
   try {
     const result = await execFileAsync(
       "curl",
@@ -88,7 +101,7 @@ async function fetchJson(url: URL): Promise<unknown> {
         "--header",
         `Origin: ${API_HEADERS.Origin}`,
         "--header",
-        `Referer: ${API_HEADERS.Referer}`,
+        `Referer: ${referer}`,
         "--header",
         `X-Site: ${API_HEADERS["X-Site"]}`,
         "--write-out",
@@ -360,7 +373,7 @@ export async function refreshVideoLink(
 }
 
 export async function findNextVideo(
-  query: string,
+  request: IwaraVideoRequest,
   page: number,
   resultIndex: number,
   fetchJsonForLookup: (url: URL) => Promise<unknown> = fetchJson,
@@ -378,10 +391,15 @@ export async function findNextVideo(
   let currentResultIndex = resultIndex;
 
   while (true) {
-    const searchUrl = new URL("/search", IWARA_API_BASE);
-    searchUrl.searchParams.set("query", query);
-    searchUrl.searchParams.set("type", "videos");
-    searchUrl.searchParams.set("sort", "relevance");
+    const searchUrl = new URL(
+      request.kind === "search" ? "/search" : "/videos",
+      IWARA_API_BASE,
+    );
+    if (request.kind === "search") {
+      searchUrl.searchParams.set("query", request.query);
+      searchUrl.searchParams.set("type", "videos");
+    }
+    searchUrl.searchParams.set("sort", request.sort);
     searchUrl.searchParams.set("page", String(currentPage));
     searchUrl.searchParams.set("limit", "32");
 

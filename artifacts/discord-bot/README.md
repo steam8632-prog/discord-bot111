@@ -1,11 +1,9 @@
 # Discord IWARA video bot
 
-The bot watches ordinary Discord messages for `/embed video [search words]`.
-It searches IWARA with the site's video-search endpoint, skips private results,
-resolves the first playable source URL, and posts only the Cloudflare Worker
-link. Repeating the same search advances to the next results page for that
-person in that channel; a different search starts at page one. The bot does not
-download or store video files.
+The bot watches ordinary Discord messages for `/embed video`, `/embed trending`,
+and `/embed popularity`. It skips private results, resolves a playable source,
+and posts only the Cloudflare Worker link. The bot does not download or store
+video files.
 
 ## Setup
 
@@ -18,14 +16,17 @@ download or store video files.
 4. Install the bot in the target server with the `bot` scope. Give it permission
    to view the channel and send messages.
 5. Start the `Discord IWARA Bot` workflow in Replit.
-6. Send a message such as `/embed video mmd` or `/embed video [mmd]`.
+6. Send a message such as `/embed video mmd`, `/embed video wuwa recent`,
+   `/embed trending`, or `/embed popularity`.
 
 The bot does not register slash commands. On startup, it removes the matching
 global `/embed video` slash command previously created by this bot, if present.
 Other application commands are left unchanged.
-Repeating the same search returns the next playable video on the current IWARA
-results page; after its results are exhausted, the bot continues on the next
-numbered page. A different search starts at the first result.
+Search filters may be added as the final word: `relevance`, `recent`, `views`,
+or `likes`. The bot maps `recent` to IWARA's date sort. Repeating the same
+search or feed returns the next playable video on its current IWARA results
+page; after that page is exhausted, it continues on the next numbered page.
+Changing the query or sort starts at the first result.
 After each video link, the bot sends a separate **Refresh** button. Pressing it
 generates a fresh proxy link for that same video without advancing search
 results; only the person who ran the search can use the button.
