@@ -1,12 +1,21 @@
 import {
+  ActionRowBuilder,
   ApplicationCommandOptionType,
   ApplicationCommandType,
+  ButtonBuilder,
+  ButtonStyle,
   Client,
   Events,
   GatewayIntentBits,
+  MessageFlags,
+  type ButtonInteraction,
   type Message,
 } from "discord.js";
-import { findNextVideo, IwaraLookupError } from "./iwara.js";
+import {
+  findNextVideo,
+  IwaraLookupError,
+  refreshVideoLink,
+} from "./iwara.js";
 
 const token = process.env["DISCORD_BOT_TOKEN"];
 if (!token) {
@@ -141,6 +150,89 @@ async function runInSearchOrder(
   }
 }
 
+function buildRefreshCustomId(videoId: string, userId: string): string {
+  const customId = `iwara:refresh:${encodeURIComponent(videoId)}:${userId}`;
+  if (customId.length > 100) {
+    throw new Error("The IWARA video ID is too long for a refresh button.");
+  }
+  return customId;
+}
+
+function parseRefreshCustomId(
+  customId: string,
+): { videoId: string; userId: string } | null {
+  const match = customId.match(/^iwara:refresh:([^:]+):(\d+)$/);
+  if (!match?.[1] || !match[2]) {
+    return null;
+  }
+
+  try {
+    return {
+      videoId: decodeURIComponent(match[1]),
+      userId: match[2],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function sendRefreshButton(
+  message: Message,
+  videoId: string,
+): Promise<void> {
+  try {
+    const button = new ButtonBuilder()
+      .setCustomId(buildRefreshCustomId(videoId, message.author.id))
+      .setLabel("Refresh")
+      .setStyle(ButtonStyle.Secondary);
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(button);
+    const channel = message.channel;
+    if (!("send" in channel) || typeof channel.send !== "function") {
+      console.error("Could not send the IWARA refresh button.");
+      return;
+    }
+
+    await channel.send({
+      content: "Obnoviť odkaz na toto video:",
+      components: [row],
+      allowedMentions: { parse: [] },
+    });
+  } catch {
+    console.error("Could not send the IWARA refresh button.");
+  }
+}
+
+async function handleRefreshButton(
+  interaction: ButtonInteraction,
+  videoId: string,
+  ownerId: string,
+): Promise<void> {
+  if (interaction.user.id !== ownerId) {
+    await interaction.reply({
+      content: "Toto tlačidlo môže použiť iba autor pôvodného vyhľadávania.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await interaction.deferReply();
+  try {
+    const video = await refreshVideoLink(videoId);
+    await interaction.editReply({
+      content: video.proxyUrl,
+      allowedMentions: { parse: [] },
+    });
+  } catch (error) {
+    if (error instanceof IwaraLookupError) {
+      await interaction.editReply(error.message);
+      return;
+    }
+
+    console.error("Could not refresh the IWARA video link.");
+    await interaction.editReply("IWARA sa teraz nepodarilo načítať. Skús to o chvíľu.");
+  }
+}
+
 async function handleMessage(message: Message): Promise<void> {
   if (message.author.bot || message.webhookId || !message.inGuild()) {
     return;
@@ -218,6 +310,7 @@ async function handleMessage(message: Message): Promise<void> {
           content: video.proxyUrl,
           allowedMentions: { parse: [] },
         });
+        await sendRefreshButton(message, video.videoId);
         return;
       }
 
@@ -243,6 +336,25 @@ async function handleMessage(message: Message): Promise<void> {
 client.on(Events.MessageCreate, (message) => {
   void handleMessage(message).catch(() => {
     console.error("Could not handle a Discord message.");
+  });
+});
+
+client.on(Events.InteractionCreate, (interaction) => {
+  if (!interaction.isButton()) {
+    return;
+  }
+
+  const refresh = parseRefreshCustomId(interaction.customId);
+  if (!refresh) {
+    return;
+  }
+
+  void handleRefreshButton(
+    interaction,
+    refresh.videoId,
+    refresh.userId,
+  ).catch(() => {
+    console.error("Could not handle an IWARA refresh interaction.");
   });
 });
 

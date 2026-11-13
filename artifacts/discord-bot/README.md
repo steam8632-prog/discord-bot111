@@ -26,6 +26,9 @@ Other application commands are left unchanged.
 Repeating the same search returns the next playable video on the current IWARA
 results page; after its results are exhausted, the bot continues on the next
 numbered page. A different search starts at the first result.
+After each video link, the bot sends a separate **Refresh** button. Pressing it
+generates a fresh proxy link for that same video without advancing search
+results; only the person who ran the search can use the button.
 
 ## Configuration
 

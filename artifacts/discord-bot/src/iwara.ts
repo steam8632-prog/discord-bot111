@@ -42,6 +42,7 @@ interface IwaraPlayableSource {
 }
 
 export interface IwaraVideoLink {
+  videoId: string;
   title: string;
   sourceUrl: string;
   proxyUrl: string;
@@ -257,6 +258,7 @@ function validateIwaraUrl(url: URL): URL {
 
 async function getSignedVideoUrl(
   value: string | null | undefined,
+  fetchJsonForLookup: (url: URL) => Promise<unknown> = fetchJson,
 ): Promise<string> {
   if (!value) {
     throw new IwaraLookupError(
@@ -275,7 +277,7 @@ async function getSignedVideoUrl(
     return fileUrl.toString();
   }
 
-  const sources = parsePlayableSources(await fetchJson(fileUrl));
+  const sources = parsePlayableSources(await fetchJsonForLookup(fileUrl));
   const selectedSource = sources
     .sort((left, right) => getSourcePriority(left.name) - getSourcePriority(right.name))[0];
 
@@ -317,6 +319,44 @@ function buildProxyUrl(signedUrl: string): string {
 function buildSourceUrl(id: string, slug?: string | null): string {
   const suffix = slug ? `/${encodeURIComponent(slug)}` : "";
   return `${IWARA_SITE_BASE}/video/${encodeURIComponent(id)}${suffix}`;
+}
+
+async function resolveVideoLink(
+  videoId: string,
+  fallbackTitle?: string,
+  fallbackSlug?: string | null,
+  fetchJsonForLookup: (url: URL) => Promise<unknown> = fetchJson,
+): Promise<IwaraVideoLink> {
+  const detailUrl = new URL(
+    `/video/${encodeURIComponent(videoId)}`,
+    IWARA_API_BASE,
+  );
+  const details = parseVideoDetails(await fetchJsonForLookup(detailUrl));
+  const signedUrl = await getSignedVideoUrl(
+    details.fileUrl,
+    fetchJsonForLookup,
+  );
+  const id = details.id || videoId;
+  const title = details.title || fallbackTitle || "";
+  const slug = details.slug || fallbackSlug;
+
+  return {
+    videoId: id,
+    title,
+    sourceUrl: buildSourceUrl(id, slug),
+    proxyUrl: buildProxyUrl(signedUrl),
+  };
+}
+
+export async function refreshVideoLink(
+  videoId: string,
+  fetchJsonForLookup: (url: URL) => Promise<unknown> = fetchJson,
+): Promise<IwaraVideoLink> {
+  if (!videoId || videoId.length > 80) {
+    throw new IwaraLookupError("Invalid IWARA video ID.");
+  }
+
+  return resolveVideoLink(videoId, undefined, null, fetchJsonForLookup);
 }
 
 export async function findNextVideo(
@@ -363,25 +403,17 @@ export async function findNextVideo(
         continue;
       }
 
-      const detailUrl = new URL(
-        `/video/${encodeURIComponent(result.id)}`,
-        IWARA_API_BASE,
-      );
-
       try {
-        const details = parseVideoDetails(await fetchJsonForLookup(detailUrl));
-        const signedUrl = await getSignedVideoUrl(details.fileUrl);
-        const id = details.id || result.id;
-        const title = details.title || result.title;
-        const slug = details.slug || result.slug;
+        const video = await resolveVideoLink(
+          result.id,
+          result.title,
+          result.slug,
+          fetchJsonForLookup,
+        );
         const nextResultIndex = index + 1;
 
         return {
-          video: {
-            title,
-            sourceUrl: buildSourceUrl(id, slug),
-            proxyUrl: buildProxyUrl(signedUrl),
-          },
+          video,
           page: currentPage,
           nextResultIndex,
           hasMoreResults:
